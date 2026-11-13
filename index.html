@@ -99,6 +99,9 @@
   .close { position:absolute; top:9%; right:9%; width:46px; height:46px; border-radius:50% 50% 46% 54%; border:0; cursor:pointer;
     background:radial-gradient(circle at 35% 30%, #7a4a2e, #3a1f12); color:#fff; font-size:24px; line-height:1; font-family:'Manrope';
     box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  #loading { position:absolute; left:50%; bottom:18px; translate:-50% 0; background:var(--cream); color:var(--ink); font-weight:700; font-size:13px;
+    padding:8px 16px; border-radius:99px; box-shadow:0 6px 18px rgba(62,34,24,.12); transition:opacity .5s; }
+  #loading.done { opacity:0; }
   #bar { position:absolute; left:0; bottom:0; height:4px; background:var(--pink); width:0; }
 
   /* Телефон: печенье сверху, текст снизу */
@@ -188,6 +191,7 @@
   </div>
 
   <div id="bar"></div>
+  <div id="loading">Печём печеньки…</div>
 </div>
 <div id="sheet" aria-hidden="true">
   <div class="cookieCard" role="dialog" aria-modal="true">
@@ -463,6 +467,7 @@ const cookies = [];
 const slotPos = k => v3((k % 3 - 1) * CELL, BOX.T + .16, (k < 3 ? -.5 : .5) * CELL);
 // Настоящие 3D-модели печенек (Higgsfield), встроены в страницу
 // модели лежат рядом со страницей: models/<вкус>.glb (Higgsfield: апскейл фото + Tripo H3.1; груша — Meshy 7)
+let loadedN = 0;
 const MODELS = {}, MODEL_SRC = ['kinder', 'nutella', 'vafla', 'orange', 'pear', 'halva'];
 async function loadModel(name) {
   try {
@@ -476,18 +481,26 @@ async function loadModel(name) {
     m.position.set(-c.x * k, -bb.min.y * k - .15, -c.z * k); m.scale.setScalar(k);
     m.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });   // тень даёт лёгкий цилиндр
     MODELS[name] = new THREE.Group(); MODELS[name].add(m);
-  } catch (e) { console.error('glb', name, e); }
+    const ck = cookies.find(q => q.f.name === name); if (ck) ck.inner.add(MODELS[name]);   // печенька «доехала»
+  } catch (e) {   // модель не загрузилась — рисуем простую печеньку из кода
+    console.error('glb', name, e);
+    const f = FLAVORS.find(f => f.name === name), { mesh, S } = makeCookieMesh(f);
+    MODELS[name] = new THREE.Group(); MODELS[name].add(mesh, toppings(f, S));
+    const ck = cookies.find(q => q.f.name === name); if (ck) ck.inner.add(MODELS[name]);
+  }
+  loadedN++; const ld = $('#loading');
+  ld.textContent = `Печём печеньки… ${loadedN} из ${MODEL_SRC.length}`;
+  if (loadedN === MODEL_SRC.length) ld.classList.add('done');
 }
 function buildCookies() {
   FLAVORS.forEach((f, k) => {
-    let inner;
-    if (MODELS[f.name]) inner = MODELS[f.name];
-    else { const { mesh, S } = makeCookieMesh(f); inner = new THREE.Group(); inner.add(mesh, toppings(f, S)); }
+    const inner = new THREE.Group();
+    if (MODELS[f.name]) inner.add(MODELS[f.name]);
     const outer = new THREE.Group(); outer.add(inner); outer.visible = false; scene.add(outer);
     // невидимый цилиндр: отбрасывает тень и ловит клики (вместо 65 тыс. треугольников модели)
     const proxy = new THREE.Mesh(new THREE.CylinderGeometry(CR * .97, CR * .97, .5, 24), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
     proxy.position.y = .1; proxy.castShadow = true; outer.add(proxy);
-    cookies.push({ f, outer, proxy, side: k % 2 === 0 ? 1 : -1, yawSlot: (rng(f.seed + 5)() - .5) * 1.2, hop: 0 });
+    cookies.push({ f, outer, inner, proxy, side: k % 2 === 0 ? 1 : -1, yawSlot: (rng(f.seed + 5)() - .5) * 1.2, hop: 0 });
   });
 }
 
@@ -683,7 +696,9 @@ const qStand = new THREE.Quaternion(), qRoll = new THREE.Quaternion(), qYaw = ne
 const X90 = new THREE.Quaternion().setFromAxisAngle(v3(1, 0, 0), Math.PI / 2);
 const AX_Y = v3(0, 1, 0), AX_Z = v3(0, 0, 1), AX_X = v3(1, 0, 0);
 const _slot = new THREE.Vector3(), _boxQ = new THREE.Quaternion(), _pr = new THREE.Vector3(), _right = new THREE.Vector3();
-function readScroll() { const max = document.documentElement.scrollHeight - innerHeight; pTarget = (max > 0 ? clamp(scrollY / max) : 0) * P_END; }
+function readScroll() { const max = document.documentElement.scrollHeight - innerHeight; pTarget = (max > 0 ? clamp(scrollY / max) : 0) * P_END;
+  if (loadedN < MODEL_SRC.length) pTarget = Math.min(pTarget, T.c0 - .014);   // ждём печеньки
+}
 addEventListener('scroll', readScroll, { passive: true });
 const toScreen = v => { _pr.copy(v).project(camera); return [(_pr.x + 1) / 2 * innerWidth, (1 - _pr.y) / 2 * innerHeight]; };
 
@@ -824,10 +839,13 @@ function resize() {
 }
 addEventListener('resize', resize);
 (async () => {
-  try { await Promise.all([document.fonts.load('900 80px Montserrat'), document.fonts.load('800 40px Manrope')]); } catch (e) {}
   logoImg = await new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = LOGO_SRC; });
-  await Promise.all([loadBox(), ...MODEL_SRC.map(loadModel)]);
+  // сначала коробка (40 КБ) — сайт виден сразу; печеньки догружаются фоном
+  const fonts = Promise.all([document.fonts.load('900 80px Montserrat'), document.fonts.load('800 40px Manrope')]).catch(() => {});
+  const models = MODEL_SRC.map(n => loadModel(n));      // качаем параллельно
+  await Promise.all([loadBox(), fonts]);
   buildBox(); buildCookies(); buildBigWords(); resize();
+  Promise.all(models).then(readScroll);
   window.__kuki = { get p() { return p; }, set p(v) { p = pTarget = v; } };
   requestAnimationFrame(frame);
 })();
