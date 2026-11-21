@@ -4,9 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Куки Луки — концепт сайта</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Montserrat:wght@800;900&display=swap">
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="preload" href="fonts/montserrat-cyrillic-900-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="modulepreload" href="lib/three.module.js">
+<link rel="preload" href="models/box.json" as="fetch" crossorigin>
 <style>
   :root { --bg:#FBF1E6; --ink:#3E2218; --pink:#E2336F; --soft:#F6E6E1; --cream:#FFF6EC; }
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -21,6 +22,7 @@
   /* Слой 4: глазурь, тексты, кнопки */
   #vig { position:fixed; inset:0; z-index:1; pointer-events:none;
     background:radial-gradient(120% 90% at 50% 42%, rgba(255,255,255,0) 45%, rgba(74,42,28,.16) 100%); }
+  @media (pointer:coarse) { #grain { display:none; } }
   #grain { position:fixed; inset:0; z-index:5; pointer-events:none; opacity:.16; mix-blend-mode:multiply; background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27200%27%20height%3D%27200%27%3E%3Cfilter%20id%3D%27n%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.9%27%20numOctaves%3D%272%27%20stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix%20values%3D%270%200%200%200%20.35%20%200%200%200%200%20.05%20%200%200%200%200%20.18%20%200%200%200%20.55%200%27%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%27200%27%20height%3D%27200%27%20filter%3D%27url%28%23n%29%27%2F%3E%3C%2Fsvg%3E"); }
   #drips { position:fixed; left:0; right:0; top:0; height:120px; z-index:3; pointer-events:none; will-change:transform; }
   #ui { position:fixed; inset:0; z-index:4; pointer-events:none; }
@@ -118,8 +120,8 @@
   #scroll { position:relative; z-index:0; height:1990vh; }
 </style>
 <script type="importmap">
-{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+{ "imports": { "three": "./lib/three.module.js",
+  "three/addons/": "./lib/jsm/" } }
 </script>
 </head>
 <body>
@@ -245,11 +247,13 @@ const v3 = (x, y, z) => new THREE.Vector3(x, y, z);
 
 /* ---------- Сцена ---------- */
 const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, LOW ? 1.75 : 2));
+// на телефоне: без сглаживания и с меньшим числом пикселей — иначе видеокарта не успевает
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LOW, alpha: true, powerPreference: 'high-performance' });
+let DPR = Math.min(devicePixelRatio, LOW ? 1.35 : 2);
+renderer.setPixelRatio(DPR);
 renderer.setClearColor(0x000000, 0);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = LOW ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(35, 1, 0.3, 80);   // узкий диапазон глубины — без мерцания граней
 const TAN = Math.tan(THREE.MathUtils.degToRad(35 / 2));
@@ -262,7 +266,7 @@ scene.add(new THREE.HemisphereLight(0xfff1e4, 0xb08670, .62));
 const sun = new THREE.DirectionalLight(0xffe3cc, 1.5);
 sun.position.set(5, 12, 9);
 sun.castShadow = true;
-sun.shadow.mapSize.set(LOW ? 1024 : 2048, LOW ? 1024 : 2048);
+sun.shadow.mapSize.set(LOW ? 512 : 2048, LOW ? 512 : 2048);
 Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 10, bottom: -10, near: 1, far: 40 });
 sun.shadow.bias = -0.0002; sun.shadow.normalBias = .035;
 scene.add(sun);
@@ -479,7 +483,12 @@ async function loadModel(name) {
     const m = gltf.scene, bb = new THREE.Box3().setFromObject(m), size = bb.getSize(new THREE.Vector3()), c = bb.getCenter(new THREE.Vector3());
     const k = 2 * CR / Math.max(size.x, size.z);               // по ширине — как остальные печеньки
     m.position.set(-c.x * k, -bb.min.y * k - .15, -c.z * k); m.scale.setScalar(k);
-    m.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });   // тень даёт лёгкий цилиндр
+    m.traverse(o => { if (o.isMesh) {
+      o.castShadow = false; o.receiveShadow = false;   // тень даёт лёгкий цилиндр
+      // печенье матовое: без металла и блеска, отражения окружения слабые — нет засветов
+      const mt = o.material; mt.metalness = 0; mt.roughness = 1; mt.envMapIntensity = .35;
+      if (mt.metalnessMap) mt.metalnessMap = null; mt.needsUpdate = true;
+    } });
     MODELS[name] = new THREE.Group(); MODELS[name].add(m);
     const ck = cookies.find(q => q.f.name === name); if (ck) ck.inner.add(MODELS[name]);   // печенька «доехала»
   } catch (e) {   // модель не загрузилась — рисуем простую печеньку из кода
@@ -706,7 +715,17 @@ function frame(now) {
   requestAnimationFrame(frame);
   try { step(now); } catch (err) { console.error(err); }
 }
+let perfN = 0, perfT = 0, perfLevel = 0;
+function autoQuality(ms) {
+  if (document.hidden || ms > 200) return;           // вкладка была скрыта — не считаем
+  perfN++; perfT += ms;
+  if (perfN < 45) return;
+  const avg = perfT / perfN; perfN = perfT = 0;
+  if (avg > 24 && perfLevel === 0) { perfLevel = 1; DPR = Math.max(1, DPR * .75); renderer.setPixelRatio(DPR); resize(); }
+  else if (avg > 24 && perfLevel === 1) { perfLevel = 2; DPR = 1; renderer.setPixelRatio(1); sun.castShadow = false; resize(); }
+}
 function step(now) {
+  if (last) autoQuality(now - last);
   const dt = Math.min(.05, (now - last) / 1000); last = now; time += dt;
   p += (pTarget - p) * (1 - Math.exp(-dt * 6));
   mouse.sx += (mouse.x - mouse.sx) * (1 - Math.exp(-dt * 5));
@@ -841,7 +860,7 @@ addEventListener('resize', resize);
 (async () => {
   logoImg = await new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = LOGO_SRC; });
   // сначала коробка (40 КБ) — сайт виден сразу; печеньки догружаются фоном
-  const fonts = Promise.all([document.fonts.load('900 80px Montserrat'), document.fonts.load('800 40px Manrope')]).catch(() => {});
+  const fonts = Promise.race([Promise.all([document.fonts.load('900 80px Montserrat'), document.fonts.load('800 40px Manrope')]).catch(() => {}), new Promise(r => setTimeout(r, 1200))]);
   const models = MODEL_SRC.map(n => loadModel(n));      // качаем параллельно
   await Promise.all([loadBox(), fonts]);
   buildBox(); buildCookies(); buildBigWords(); resize();
